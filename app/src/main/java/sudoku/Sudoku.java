@@ -5,11 +5,20 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.stream.Collectors;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Alert.AlertType;
+import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
@@ -26,8 +35,11 @@ public class Sudoku extends Application
     public static final int SIZE = 9;
     private VBox root;
     private TextField[][] textFields = new TextField[SIZE][SIZE];
-    private int width = 800;
-    private int height = 800;
+    private int width = 700;
+    private int height = 700;
+    private Label timerLabel;
+    private Instant startTime;
+    private Timer timer;
     private boolean updatingBoard = false;
 
     @Override
@@ -36,6 +48,9 @@ public class Sudoku extends Application
         root = new VBox();
 
         //System.out.println(new File(".").getAbsolutePath());
+
+        timerLabel = new Label("Time: 00:00");
+        root.getChildren().add(timerLabel);
 
         root.getChildren().add(createMenuBar(primaryStage));
 
@@ -98,12 +113,18 @@ public class Sudoku extends Application
                 // add handler for when we RIGHT-CLICK a textfield
                 // to bring up a selection of possible values
                 textField.setOnContextMenuRequested(event -> {
-                    // change the textfield background to red while keeping the rest of the css the same
                     textField.getStyleClass().add("text-field-highlight");
+                    String id = textField.getId();
+                    String[] parts = id.split("-");
+                    int r = Integer.parseInt(parts[0]);
+                    int c = Integer.parseInt(parts[1]);
+                    Set<Integer> possibleValues = board.getPossibleValues(r, c);
+                    String possibleValuesStr = possibleValues.stream()
+                        .map(Object::toString)
+                        .collect(Collectors.joining(" "));
                     Alert alert = new Alert(AlertType.INFORMATION);
                     alert.setTitle("Possible values");
-                    // TODO: show a list of possible values that can go in this square
-                    alert.setContentText("1 2 3 4 5 6 7 8 9");
+                    alert.setContentText(possibleValuesStr);
                     alert.showAndWait();
                     textField.getStyleClass().remove("text-field-highlight");
                 });
@@ -214,6 +235,41 @@ public class Sudoku extends Application
         updatingBoard = false;
     }
 
+    private void showHint() {
+        List<int[]> singlePossibleValueCells = board.getSinglePossibleValueCells();
+        for (int[] cell : singlePossibleValueCells) {
+            int row = cell[0];
+            int col = cell[1];
+            textFields[row][col].getStyleClass().add("hint-highlight");
+        }
+    }
+
+    // timer feature
+    private void startTimer() {
+        if (timer != null) {
+            timer.cancel();
+        }
+        startTime = Instant.now();
+        timer = new Timer(true);
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                Platform.runLater(() -> {
+                    Duration duration = Duration.between(startTime, Instant.now());
+                    long minutes = duration.toMinutes();
+                    long seconds = duration.minusMinutes(minutes).getSeconds();
+                    timerLabel.setText(String.format("Time: %02d:%02d", minutes, seconds));
+                });
+            }
+        }, 0, 1000);
+    }
+
+    private void stopTimer() {
+        if (timer != null) {
+            timer.cancel();
+        }
+    }
+
     private MenuBar createMenuBar(Stage primaryStage)
     {
         MenuBar menuBar = new MenuBar();
@@ -239,6 +295,7 @@ public class Sudoku extends Application
                     //TODO: loadBoard() method should throw an exception if the file is not a valid sudoku board
                     board = Board.loadBoard(new FileInputStream(sudokuFile));
                     updateBoard();
+                    startTimer();
                 } catch (Exception e) {
                     // pop up and error window
                     Alert alert = new Alert(AlertType.ERROR);
@@ -293,19 +350,26 @@ public class Sudoku extends Application
 
         menuBar.getMenus().add(fileMenu);
 
-        //
-        // Edit
-        //
         Menu editMenu = new Menu("Edit");
 
         addMenuItem(editMenu, "Undo", () -> {
             System.out.println("Undo");
             //TODO: Undo the last move
+            board.undo();
+            updateBoard();
         });
 
         addMenuItem(editMenu, "Show values entered", () -> {
             System.out.println("Show all the values we've entered since we loaded the board");
-            //TODO: pop up a window showing all of the values we've entered
+            List<Move> moves = board.getMoves();
+            String movesString = moves.stream()
+                .map(move -> String.format("Row: %d, Col: %d, Value: %d", move.row, move.col, move.newValue))
+                .collect(Collectors.joining("\n"));
+            Alert alert = new Alert(AlertType.INFORMATION);
+            alert.setTitle("Moves Entered");
+            alert.setHeaderText("All values entered since the board was loaded:");
+            alert.setContentText(movesString);
+            alert.showAndWait();
         });
 
         menuBar.getMenus().add(editMenu);
@@ -318,9 +382,34 @@ public class Sudoku extends Application
         addMenuItem(hintMenu, "Show hint", () -> {
             System.out.println("Show hint");
             //TODO: highlight cell where only one legal value is possible
+            showHint();
         });
 
         menuBar.getMenus().add(hintMenu);
+        
+        // button for Solve feature
+        Menu solveMenu = new Menu("Solve");
+
+        addMenuItem(solveMenu, "Solve Puzzle", () -> {
+            System.out.println("Solve Puzzle");
+            if (board.solve()) {
+                updateBoard();
+                stopTimer();
+                Alert alert = new Alert(AlertType.INFORMATION);
+                alert.setTitle("Solved");
+                alert.setHeaderText(null);
+                alert.setContentText("The puzzle has been solved!");
+                alert.showAndWait();
+            } else {
+                Alert alert = new Alert(AlertType.ERROR);
+                alert.setTitle("Unsolvable");
+                alert.setHeaderText(null);
+                alert.setContentText("The puzzle cannot be solved.");
+                alert.showAndWait();
+            }
+        });
+
+        menuBar.getMenus().add(solveMenu);
 
         return menuBar;
     }
